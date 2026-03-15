@@ -1,0 +1,30 @@
+suite: r52-smoke-tests
+
+tasks:
+  - id: hello_world
+    description: |
+      Create a minimal ARM Cortex-R52 bare-metal program that prints
+      "Hello from R52!" using semi-hosting (SYS_WRITE0 HLT instruction)
+      and then exits cleanly using SYS_EXIT semi-hosting.
+    repo: new
+    template: cortex-r52-baremetal
+    expected_output: "Hello from R52!"
+    match: contains
+    toolchain: gnu
+    max_iterations: 5
+
+  - id: counter
+    description: |
+      Implement a counter that counts from 1 to 5 and prints each value
+      on a new line using semi-hosting. Expected output format:
+      Counter: 1
+      Counter: 2
+      Counter: 3
+      Counter: 4
+      Counter: 5
+    repo: new
+    template: cortex-r52-baremetal
+    expected_output: "Counter: 5"
+    match: contains
+    toolchain: gnu
+    max_iterations: 5

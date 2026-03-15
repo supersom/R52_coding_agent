@@ -1,0 +1,6 @@
+name: cortex-r52-baremetal
+description: "Minimal bare-metal project: startup.s (AArch64), linker script, main.c, Makefile (GNU)"
+use_when: "Simple feature development on Cortex-R52, no RTOS, single core, GNU toolchain"
+toolchain: [gnu]
+files: [startup.s, link.ld, main.c, Makefile]
+tags: [baremetal, gnu, aarch64, minimal]
