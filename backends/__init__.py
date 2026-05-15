@@ -46,12 +46,17 @@ REGISTRY: dict[str, Callable[..., LLMBackend]] = {
     "codex-cli":     _load_codex_cli,
 }
 
+def _openrouter_default() -> str:
+    from .openrouter_api import FREE_ROUTER
+    return FREE_ROUTER
+
+
 DEFAULT_MODELS: dict[str, str] = {
     "anthropic-api": "claude-sonnet-4-6",
     "openai-api":    "gpt-4o",
     # To use the auto-router:  --model openrouter/free
     # To use a paid model:     --model anthropic/claude-sonnet-4-6
-    "openrouter":    "qwen/qwen3-coder:free",
+    "openrouter":    _openrouter_default(),
     "claude-cli":    "claude-sonnet-4-6",
     "gemini-cli":    "gemini-2.5-pro",
     "codex-cli":     "codex-latest",
