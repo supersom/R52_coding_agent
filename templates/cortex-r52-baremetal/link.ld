@@ -1,38 +1,30 @@
-/*
- * link.ld — Modified linker script for UART peripheral
- *
- * Added UART device region at 0x1C090000
- */
-
 MEMORY
 {
-    ROM (rx) : ORIGIN = 0x00000000, LENGTH = 256M
-    RAM (rwx) : ORIGIN = 0x10000000, LENGTH = 256M
-    DEVICE (rx) : ORIGIN = 0x1C090000, LENGTH = 0x1000  @ UART peripheral
+    ATCM (rx)  : ORIGIN = 0x00000000, LENGTH = 32K   /* Tightly-Coupled Memory A */
+    BRAM (rwx) : ORIGIN = 0x10000000, LENGTH = 512K  /* Block RAM — stack/data */
 }
 
 SECTIONS
 {
     .text : {
         KEEP(*(.vectors))
-        *(.text)
-        *(.rodata)
-    } > ROM
+        *(.text*)
+        *(.rodata*)
+    } > ATCM
 
     .data : AT(ADDR(.text) + SIZEOF(.text))
     {
         __data_start = .;
-        *(.data)
+        *(.data*)
         __data_end = .;
-    } > RAM
+    } > BRAM
 
     .bss (NOLOAD) : {
         __bss_start = .;
+        *(.bss*)
         *(COMMON)
-        *(.bss)
         __bss_end = .;
-    } > RAM
+    } > BRAM
 
-    /* UART device region */
-    UART_DEVICE : ORIGIN = 0x1C090000, LENGTH = 0x1000
+    _stack_top = ORIGIN(BRAM) + LENGTH(BRAM);  /* 0x10080000 — top of BRAM */
 }

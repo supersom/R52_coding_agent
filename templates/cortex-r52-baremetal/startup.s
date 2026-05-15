@@ -1,52 +1,50 @@
-/*
- * startup.s — Modified startup for Cortex-R52 with UART support
- *
- * Changes:
- * 1. Added UART vector entry
- * 2. Enabled UART in reset handler
- */
-
 .syntax unified
-.cpu cortex-r52
 .arch armv8-r
+.arm
 
-.text
 .section .vectors, "ax"
+.align 5
 .global _start
 _start:
-    b reset_handler
-    b undef_handler
-    b svc_handler
-    b prefetch_handler
-    b data_abort_handler
-    b irq_handler
-    b fiq_handler
-    b reset_handler
+    b reset_handler         /* 0x00 Reset                 */
+    b undef_handler         /* 0x04 Undefined Instruction */
+    b svc_handler           /* 0x08 SVC                   */
+    b prefetch_handler      /* 0x0C Prefetch Abort        */
+    b data_abort_handler    /* 0x10 Data Abort            */
+    b .                     /* 0x14 Reserved/HVC          */
+    b irq_handler           /* 0x18 IRQ                   */
+    b fiq_handler           /* 0x1C FIQ                   */
 
-/* UART vector entry */
-.weak fiq_handler
-.type fiq_handler, %function
-fiq_handler:
-    b UART_IRQHandler
-
-/* UART initialization in reset handler */
+.section .text, "ax"
+.global reset_handler
 reset_handler:
-    /* Existing stack setup and FPU enable code */
-
-    /* Enable UART peripheral */
-    mov r0, #0x1C090000
-    ldr r1, [r0]
-    orr r1, r1, #0x1  @ Enable UART
-    str r1, [r0]
-
-    /* Call main() */
+    ldr r0, =_stack_top
+    mov sp, r0
     bl main
+.L_hang:
+    wfe
+    b .L_hang
+
+.weak undef_handler
+undef_handler:
     b .
 
-/* Weak handlers */
-.weak undef_handler
 .weak svc_handler
+svc_handler:
+    b .
+
 .weak prefetch_handler
+prefetch_handler:
+    b .
+
 .weak data_abort_handler
+data_abort_handler:
+    b .
+
 .weak irq_handler
+irq_handler:
+    b .
+
 .weak fiq_handler
+fiq_handler:
+    b .
