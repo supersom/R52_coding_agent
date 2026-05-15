@@ -466,6 +466,15 @@ def run_agent(
     final_dict = graph.invoke(initial_state.model_dump())
     final = AgentState(**final_dict)
 
+    # Infer terminal status: the graph exits via __end__ with status=RUNNING
+    # on the success path (validation passed). Resolve it here.
+    if final.status == AgentStatus.RUNNING:
+        vr = final.validation_result
+        if vr and vr.passed:
+            final = final.model_copy(update={"status": AgentStatus.SUCCESS})
+        else:
+            final = final.model_copy(update={"status": AgentStatus.FAILED})
+
     total = time.monotonic() - t0
     logger.run_end(final.status.value, final.iteration, total)
     tracer.shutdown()

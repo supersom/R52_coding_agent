@@ -280,6 +280,7 @@ def _run_single_task(
     try:
         final = run_agent(initial, be, cfg, logger, tracer, ui)
     finally:
+        ui.stop()
         logger.close()
         tracer.shutdown()
 
@@ -374,6 +375,7 @@ def chat(repo, backend, model, toolchain, simulator, max_iterations, timeout, ve
         try:
             final = run_agent(initial, be, cfg, logger, tracer, ui)
         finally:
+            ui.stop()
             logger.close()
             tracer.shutdown()
 

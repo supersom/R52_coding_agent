@@ -90,6 +90,7 @@ class AgentUI:
     def stop(self) -> None:
         if self._live:
             self._live.__exit__(None, None, None)
+            self._live = None
 
     def update(
         self,
