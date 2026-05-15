@@ -31,9 +31,11 @@ from langgraph.graph import StateGraph, END
 
 from agent.state import AgentState, AgentStatus, BuildResult, BuildSystem
 from agent.nodes import (
+    run_scout,
     run_planner, run_generator, run_reviewer, review_approved,
     run_builder, build_succeeded, run_runner, run_succeeded,
     run_validator, validation_passed, run_patcher, should_retry,
+    run_diagnoser,
 )
 from backends.base import LLMBackend
 from toolchain.config import ToolchainConfig
@@ -59,6 +61,30 @@ def _make_nodes(
     Using closures here keeps the graph definition clean — each node function
     has exactly the signature StateGraph expects: (state) → state.
     """
+
+    def node_scout(state) -> dict:
+        state = AgentState.model_validate(state)
+        t0 = time.monotonic()
+        ui.update(phase="SCOUT", iteration=state.iteration)
+        logger.node_start("scout", state.iteration)
+        with tracer.span("scout", iteration=state.iteration) as sp:
+            new_state = run_scout(state, backend)
+            hw = new_state.repo_context.get("hardware_model", {})
+            fields = hw.get("fields", {})
+            verified = sum(1 for f in fields.values() if f.get("trust") != "prior")
+            total = len(fields)
+            sp.event("scout.result",
+                     verified=str(verified), total=str(total),
+                     machine=hw.get("machine", ""))
+        dur = time.monotonic() - t0
+        logger.node_end("scout", state.iteration, dur)
+        logger.scout_result(state.iteration, total, verified, hw.get("machine", ""),
+                            hw.get("fields", {}))
+        probe_results = new_state.repo_context.get("scout_probe_results", [])
+        if probe_results:
+            logger.scout_probes(state.iteration, probe_results)
+        ui.update(detail=f"Hardware model: {verified}/{total} fields verified from live probes or source")
+        return new_state.model_dump()
 
     def node_plan(state) -> dict:
         state = AgentState.model_validate(state)
@@ -161,6 +187,10 @@ def _make_nodes(
                          corrections=str(list(review.get("corrected_files", {}).keys())))
             dur = time.monotonic() - t0
             logger.node_end("review", state.iteration, dur)
+            logger.review_result(
+                state.iteration, approved, issues,
+                review.get("rejection_count", 0),
+            )
             ui.update(detail=f"Review: {'approved' if approved else 'issues found: ' + str(issues[:2])}")
             return new_state.model_dump()
         except Exception as exc:
@@ -248,6 +278,21 @@ def _make_nodes(
             ui.update(detail=f"Validation: {'PASSED' if vr.passed else 'FAILED'}\n{vr.detail[:200]}")
         return new_state.model_dump()
 
+    def node_diagnose(state) -> dict:
+        state = AgentState.model_validate(state)
+        t0 = time.monotonic()
+        ui.update(phase="DIAGNOSE", iteration=state.iteration)
+        logger.node_start("diagnose", state.iteration)
+        with tracer.span("diagnose", iteration=state.iteration) as sp:
+            new_state = run_diagnoser(state, backend, config)
+            diagnosis = new_state.repo_context.get("diagnosis", "")
+            sp.event("diagnose.result", summary=diagnosis[:200])
+        dur = time.monotonic() - t0
+        logger.node_end("diagnose", state.iteration, dur)
+        logger.diagnosis_result(state.iteration, diagnosis)
+        ui.update(detail=f"Diagnosis: {diagnosis[:150]}")
+        return new_state.model_dump()
+
     def node_patch(state) -> dict:
         state = AgentState.model_validate(state)
         t0 = time.monotonic()
@@ -276,11 +321,13 @@ def _make_nodes(
             return new_state.model_dump()
 
     return {
+        "scout":    node_scout,
         "plan":     node_plan,
         "generate": node_generate,
         "review":   node_review,
         "build":    node_build,
         "run":      node_run,
+        "diagnose": node_diagnose,
         "validate": node_validate,
         "patch":    node_patch,
     }
@@ -297,16 +344,28 @@ def _coerce(state) -> AgentState:
     return AgentState.model_validate(state)
 
 
+_MAX_REVIEW_REJECTIONS = 3
+
+
 def _after_review(state) -> Literal["build", "generate"]:
-    return "build" if review_approved(_coerce(state)) else "generate"
+    s = _coerce(state)
+    # Count consecutive rejections via the review context
+    review = s.repo_context.get("review", {})
+    rejections = review.get("rejection_count", 0)
+    if review_approved(s):
+        return "build"
+    # After too many rejections, force to BUILD so errors surface concretely.
+    if rejections >= _MAX_REVIEW_REJECTIONS:
+        return "build"
+    return "generate"
 
 
 def _after_build(state) -> Literal["run", "patch"]:
     return "run" if build_succeeded(_coerce(state)) else "patch"
 
 
-def _after_run(state) -> Literal["validate", "patch"]:
-    return "validate" if run_succeeded(_coerce(state)) else "patch"
+def _after_run(state) -> Literal["validate", "diagnose"]:
+    return "validate" if run_succeeded(_coerce(state)) else "diagnose"
 
 
 def _after_validate(state) -> Literal["__end__", "patch"]:
@@ -352,13 +411,15 @@ def build_graph(
     g.set_entry_point("plan")
 
     # Linear edges
-    g.add_edge("plan", "generate")
+    g.add_edge("plan", "scout")
+    g.add_edge("scout", "generate")
     g.add_edge("generate", "review")
 
     # Conditional edges
     g.add_conditional_edges("review",   _after_review,   {"build": "build", "generate": "generate"})
     g.add_conditional_edges("build",    _after_build,    {"run": "run", "patch": "patch"})
-    g.add_conditional_edges("run",      _after_run,      {"validate": "validate", "patch": "patch"})
+    g.add_conditional_edges("run",      _after_run,      {"validate": "validate", "diagnose": "diagnose"})
+    g.add_edge("diagnose", "patch")
     g.add_conditional_edges("validate", _after_validate, {"__end__": END, "patch": "patch"})
     g.add_conditional_edges("patch",    _after_patch,    {"generate": "generate", "__end__": END})
 
