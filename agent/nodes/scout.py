@@ -147,8 +147,8 @@ You have exactly two tools:
     Execute any read-only shell command and return its output.
     Use your knowledge of the simulator to choose the right commands.
     Examples of what you might generate depending on simulator:
-      - QEMU machines: use the QEMU monitor or QMP protocol to query the
-        live machine. You know how to do this.
+      - QEMU: Use only static queries (flags, file reads, grep) as a live
+        simulator process will hang waiting for firmware and time out.
       - ARM FVP: invoke the FVP binary with --list-params or similar flags.
       - dtc / device tree: run dtc to decompile a DTB file.
       - Grep: use grep to search simulator source or config files.
@@ -267,6 +267,8 @@ def run_scout(state: AgentState, backend: LLMBackend) -> AgentState:
         probe_results.append({
             "label": probe.label,
             "tool": probe.tool,
+            "command": probe.command,
+            "path": probe.path,
             "purpose": probe.purpose,
             "output": output[:8000],
             "success": success,

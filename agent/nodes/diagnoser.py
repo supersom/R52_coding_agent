@@ -209,6 +209,7 @@ def run_diagnoser(state: AgentState, backend: LLMBackend, config: ToolchainConfi
     symptom = _format_symptom(state)
     hw_map = format_hardware_model(state.repo_context.get("hardware_model", {}))
 
+    probe_results: list[dict] = []
     try:
         # Phase 1 — decide what to investigate
         plan: DiagnosticPlan = backend.complete_structured(
@@ -231,6 +232,8 @@ def run_diagnoser(state: AgentState, backend: LLMBackend, config: ToolchainConfi
             probe_results.append({
                 "label": probe.label,
                 "tool": probe.tool,
+                "command": probe.command,
+                "path": probe.path,
                 "purpose": probe.purpose,
                 "output": output[:8000],
                 "success": success,
@@ -258,5 +261,5 @@ def run_diagnoser(state: AgentState, backend: LLMBackend, config: ToolchainConfi
     except Exception as exc:
         diagnosis_text = f"(diagnosis failed: {exc})"
 
-    new_ctx = {**state.repo_context, "diagnosis": diagnosis_text}
+    new_ctx = {**state.repo_context, "diagnosis": diagnosis_text, "diagnose_probe_results": probe_results}
     return state.model_copy(update={"repo_context": new_ctx})

@@ -104,6 +104,15 @@ def _make_nodes(
                          rationale=plan.get("rationale", ""))
             dur = time.monotonic() - t0
             logger.node_end("plan", state.iteration, dur)
+            logger.plan_result(
+                state.iteration,
+                build_system=new_state.build_system.value,
+                is_new_project=new_state.is_new_project,
+                files_to_create=plan.get("files_to_create", []),
+                files_to_modify=plan.get("files_to_modify", []),
+                implementation_steps=plan.get("implementation_steps", []),
+                rationale=plan.get("rationale", ""),
+            )
             ui.update(detail=f"Plan complete. Build system: {new_state.build_system.value}")
             return new_state.model_dump()
         except Exception as exc:
@@ -290,6 +299,9 @@ def _make_nodes(
         dur = time.monotonic() - t0
         logger.node_end("diagnose", state.iteration, dur)
         logger.diagnosis_result(state.iteration, diagnosis)
+        diagnose_probes = new_state.repo_context.get("diagnose_probe_results", [])
+        if diagnose_probes:
+            logger.diagnose_probes(state.iteration, diagnose_probes)
         ui.update(detail=f"Diagnosis: {diagnosis[:150]}")
         return new_state.model_dump()
 

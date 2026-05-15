@@ -71,23 +71,51 @@ class RunLogger:
             "duration_s": duration_s,
         })
 
+    def plan_result(self, iteration: int, build_system: str, is_new_project: bool,
+                    files_to_create: list, files_to_modify: list,
+                    implementation_steps: list, rationale: str) -> None:
+        self._write("plan_result", {
+            "iteration": iteration,
+            "build_system": build_system,
+            "is_new_project": is_new_project,
+            "files_to_create": files_to_create,
+            "files_to_modify": files_to_modify,
+            "implementation_steps": implementation_steps,
+            "rationale": rationale,
+        })
+
     def diagnosis_result(self, iteration: int, text: str) -> None:
         self._write("diagnosis_result", {
             "iteration": iteration, "diagnosis": text[:1000],
         })
 
     def scout_probes(self, iteration: int, probes: list) -> None:
-        """Log abbreviated probe results so SCOUT quality is visible in the trace."""
-        abbreviated = [
+        full = [
             {
                 "label": p.get("label", ""),
                 "tool": p.get("tool", ""),
+                "command": p.get("command"),
+                "path": p.get("path"),
                 "success": p.get("success", False),
-                "output_snippet": p.get("output", "")[:200],
+                "output": p.get("output", "")[:2000],
             }
             for p in probes
         ]
-        self._write("scout_probes", {"iteration": iteration, "probes": abbreviated})
+        self._write("scout_probes", {"iteration": iteration, "probes": full})
+
+    def diagnose_probes(self, iteration: int, probes: list) -> None:
+        full = [
+            {
+                "label": p.get("label", ""),
+                "tool": p.get("tool", ""),
+                "command": p.get("command"),
+                "path": p.get("path"),
+                "success": p.get("success", False),
+                "output": p.get("output", "")[:2000],
+            }
+            for p in probes
+        ]
+        self._write("diagnose_probes", {"iteration": iteration, "probes": full})
 
     def review_result(self, iteration: int, approved: bool, issues: list, rejection_count: int) -> None:
         self._write("review_result", {
