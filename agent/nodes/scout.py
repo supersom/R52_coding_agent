@@ -20,12 +20,12 @@ Flow:
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from agent.probe_tools import run_command, read_file
 from agent.state import AgentState
 from backends.base import LLMBackend
 
@@ -99,40 +99,35 @@ class HardwareModelSynthesis(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Tool implementations — two primitives only
+# Probe deny list — paths the LLM must not read via probes.
+# Supports prefix matching (directory) and exact file matching.
+# Paths are matched against the resolved absolute path so relative tricks
+# like "../../docs" are still caught.
 # ---------------------------------------------------------------------------
 
-def _run_command(command: str, timeout: int = 15) -> tuple[str, bool]:
-    try:
-        r = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=timeout,
-        )
-        output = (r.stdout + r.stderr).strip()
-        return output or "(no output)", r.returncode == 0
-    except subprocess.TimeoutExpired:
-        return "(command timed out)", False
-    except OSError as e:
-        return f"(error: {e})", False
+_PROBE_DENY: list[str] = [
+    "docs/",    # project docs — human notes, may bias hardware model synthesis
+    ".git/",    # git internals
+]
 
 
-def _read_file(path: str) -> tuple[str, bool]:
-    p = Path(path)
-    if not p.exists():
-        return f"(not found: {path})", False
-    try:
-        content = p.read_text(errors="replace")
-        if len(content) > 20000:
-            content = content[:20000] + "\n... (truncated)"
-        return content, True
-    except OSError as e:
-        return f"(read error: {e})", False
+def _is_denied(path: str) -> bool:
+    resolved = str(Path(path).resolve())
+    # Also check the raw path so relative paths like "docs/foo.md" match.
+    for denied in _PROBE_DENY:
+        denied_abs = str(Path(denied).resolve())
+        if resolved.startswith(denied_abs) or path.startswith(denied):
+            return True
+    return False
 
 
 def _execute_probe(probe: ProbeSpec) -> tuple[str, bool]:
     if probe.tool == "run_command" and probe.command:
-        return _run_command(probe.command)
+        return run_command(probe.command)
     if probe.tool == "read_file" and probe.path:
-        return _read_file(probe.path)
+        if _is_denied(probe.path):
+            return f"(access denied: {probe.path})", False
+        return read_file(probe.path)
     return "(probe misconfigured — missing command or path)", False
 
 

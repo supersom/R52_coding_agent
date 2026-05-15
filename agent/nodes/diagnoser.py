@@ -17,12 +17,11 @@ against what the code actually does.
 
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agent.probe_tools import run_command, read_file
 from agent.state import AgentState
 from agent.nodes.scout import format_hardware_model
 from agent.prompts.system_r52 import SYSTEM_R52
@@ -72,41 +71,11 @@ class DiagnosisResult(BaseModel):
     confidence: str = Field(description="'high', 'medium', or 'low'.")
 
 
-# ---------------------------------------------------------------------------
-# Tool implementations — same primitives as SCOUT
-# ---------------------------------------------------------------------------
-
-def _run_command(command: str, timeout: int = 15) -> tuple[str, bool]:
-    try:
-        r = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=timeout,
-        )
-        output = (r.stdout + r.stderr).strip()
-        return output or "(no output)", r.returncode == 0
-    except subprocess.TimeoutExpired:
-        return "(command timed out)", False
-    except OSError as e:
-        return f"(error: {e})", False
-
-
-def _read_file(path: str) -> tuple[str, bool]:
-    p = Path(path)
-    if not p.exists():
-        return f"(not found: {path})", False
-    try:
-        content = p.read_text(errors="replace")
-        if len(content) > 20000:
-            content = content[:20000] + "\n... (truncated)"
-        return content, True
-    except OSError as e:
-        return f"(read error: {e})", False
-
-
 def _execute_probe(probe: DiagnosticProbe) -> tuple[str, bool]:
     if probe.tool == "run_command" and probe.command:
-        return _run_command(probe.command)
+        return run_command(probe.command)
     if probe.tool == "read_file" and probe.path:
-        return _read_file(probe.path)
+        return read_file(probe.path)
     return "(probe misconfigured)", False
 
 
