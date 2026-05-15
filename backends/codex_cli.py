@@ -27,7 +27,7 @@ class CodexCliBackend:
 
     def _invoke(self, prompt: str, timeout: int = 300) -> str:
         result = subprocess.run(
-            [self.cli_path, "-q", prompt],   # -q = quiet/non-interactive
+            [self.cli_path, "exec", prompt],  # exec = non-interactive mode
             capture_output=True,
             text=True,
             timeout=timeout,

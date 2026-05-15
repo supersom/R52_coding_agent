@@ -31,7 +31,7 @@ from observability.tracer import record_llm_request, record_llm_response
 
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-FREE_ROUTER = "openrouter/free"
+FREE_ROUTER = "poolside/laguna-xs.2:free" # "qwen/qwen3-coder:free" # "openrouter/free"
 
 # High token limit to accommodate reasoning models' thinking chains.
 # Free models often think for 2k-6k tokens before the actual output.
