@@ -39,8 +39,7 @@ FVP_DEFAULT_FLAGS = [
 ]
 
 QEMU_DEFAULT_FLAGS = [
-    "-M", "versatilepb",
-    "-m", "128M",
+    "-M", "mps3-an536",
     "-nographic",
 ]
 
@@ -81,7 +80,23 @@ def run_on_qemu(
         cmd += extra_flags
     cmd += ["-kernel", elf_path]
 
-    return _run_subprocess(cmd, config.simulator_timeout)
+    result = _run_subprocess(cmd, config.simulator_timeout)
+
+    # Bare-metal firmware on mps3-an536 loops forever — it never exits cleanly.
+    # A timeout with non-empty stdout means QEMU ran and the firmware produced
+    # output before the timeout killed it. Treat that as a successful run and
+    # let the validator check the content.
+    if result.timed_out and result.stdout.strip():
+        result = RunResult(
+            success=True,
+            timed_out=True,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            returncode=result.returncode,
+            duration_s=result.duration_s,
+        )
+
+    return result
 
 
 def _run_subprocess(cmd: list[str], timeout: int) -> RunResult:
