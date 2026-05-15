@@ -71,6 +71,43 @@ class RunLogger:
             "duration_s": duration_s,
         })
 
+    def diagnosis_result(self, iteration: int, text: str) -> None:
+        self._write("diagnosis_result", {
+            "iteration": iteration, "diagnosis": text[:1000],
+        })
+
+    def scout_probes(self, iteration: int, probes: list) -> None:
+        """Log abbreviated probe results so SCOUT quality is visible in the trace."""
+        abbreviated = [
+            {
+                "label": p.get("label", ""),
+                "tool": p.get("tool", ""),
+                "success": p.get("success", False),
+                "output_snippet": p.get("output", "")[:200],
+            }
+            for p in probes
+        ]
+        self._write("scout_probes", {"iteration": iteration, "probes": abbreviated})
+
+    def review_result(self, iteration: int, approved: bool, issues: list, rejection_count: int) -> None:
+        self._write("review_result", {
+            "iteration": iteration, "approved": approved,
+            "issues": issues[:5], "rejection_count": rejection_count,
+        })
+
+    def scout_result(self, iteration: int, fields: int, verified: int, machine: str,
+                     field_data: dict | None = None) -> None:
+        record: dict = {
+            "iteration": iteration, "total_fields": fields,
+            "verified_fields": verified, "machine": machine,
+        }
+        if field_data:
+            record["fields"] = {
+                k: {"value": v.get("value"), "trust": v.get("trust")}
+                for k, v in field_data.items()
+            }
+        self._write("scout_result", record)
+
     def build_result(self, iteration: int, success: bool, duration_s: float, stderr_snippet: str) -> None:
         self._write("build_result", {
             "iteration": iteration, "success": success,
