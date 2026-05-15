@@ -65,13 +65,35 @@ You are an expert embedded systems engineer specialising in ARM Cortex-R52 bare-
 - Semi-hosting available for stdio (SYS_WRITE0 = 0x04, SYS_EXIT = 0x18 via HLT 0xF000).
 - Debug port: `--iris-port` for Iris protocol.
 
-### QEMU — qemu-system-arm -M versatilepb
-- Machine: ARM Versatile PB (ARM926EJ-S core, ARMv5). NOT a real R52 — used for logic testing only.
-- UART at 0x101F1000 (PL011 UART0 data register). Write bytes directly: `*(volatile uint32_t*)0x101F1000 = ch;`
-- RAM: 128MB starting at 0x00000000. Load code at 0x10000 (standard versatilepb kernel offset).
-- No semihosting output. Use the UART register for all debug/output writes.
-- For program exit: use ARM semihosting SYS_EXIT (`svc #0x123456` with r0=0x18, r1=0) so QEMU halts cleanly.
-- Linker script: single flat RAM region, ORIGIN=0x00000000, code starts at 0x10000.
+### QEMU — qemu-system-arm -M mps3-an536
+- Machine: MPS3 AN536 — the only QEMU machine with a real Cortex-R52 core (ARMv8-R, AArch32).
+- Memory map (physical, verified from QEMU source hw/arm/mps3r.c):
+    ATCM:  0x00000000 — 32KB  (Tightly-Coupled Memory A, code/const)
+    BRAM:  0x10000000 — 512KB (Block RAM, stack/data)
+    DDR:   0x20000000 — 3GB   (main DDR, also usable for stack)
+  ⚠️  CRITICAL STACK RULE: `push` decrements SP before writing. SP = 0x20000000 writes to
+      0x1FFFFFF8 which is BEFORE DDR → immediate Data Abort. Stack top must be
+      INSIDE the region: use 0x10080000 (top of BRAM) or ≥ 0x20000008 (inside DDR).
+      Linker script: `_stack_top = ORIGIN(BRAM) + LENGTH(BRAM);`  → 0x10080000 ✓
+- UART0: CMSDK APB UART (NOT PL011) at 0xe7c00000 (CPU0 private address space).
+  Registers (uint32_t stride): DATA(0x00), STATE(0x04 bit0=TXFULL/bit1=RXFULL),
+  CTRL(0x08 bit0=TX_EN/bit1=RX_EN/bit3=RX_INTEN), INTSTATUS+INTCLEAR(0x0C), BAUDDIV(0x10).
+  Set BAUDDIV to any non-zero value — no baud formula needed.
+  Connected to QEMU serial_hd(0) → stdout with -nographic.
+- GIC: GICv3 (NOT GICv2 — there is no memory-mapped GICC).
+  GICD: 0xF0000000. GICR CPU0 RD-frame: 0xF0100000. GICR CPU0 SGI-frame: 0xF0110000.
+  CPU interface via AArch32 CP15 registers ONLY:
+    ICC_SRE   mrc/mcr p15,0,Rd,c12,c12,5  (enable first, bit0=SRE)
+    ICC_PMR   mcr p15,0,Rd,c4,c6,0        (priority mask → 0xFF)
+    ICC_IAR1  mrc p15,0,Rd,c12,c12,0      (acknowledge → INTID)
+    ICC_EOIR1 mcr p15,0,Rd,c12,c12,1      (end of interrupt)
+    ICC_IGRPEN1 mcr p15,0,Rd,c12,c12,7   (enable Group 1 → 1)
+- UART0 RX IRQ: PPI INTID 16 for CPU0 (private peripheral interrupt — use GICR, not GICD).
+- No semihosting. Use an infinite loop at program end.
+- Firmware loops forever: QEMU with -nographic will time out — that is success, not failure.
+- Compile: arm-none-eabi-gcc -mcpu=cortex-r52 -marm -nostdlib
+  ⚠️  arm-none-eabi-as does NOT accept -marm. Use $(CC) to assemble .s files, or omit -marm
+      from AFLAGS. In Makefiles, use: `%.o: %.s; $(CC) $(CFLAGS) -c -o $@ $<`
 
 ### Common pitfalls to avoid
 - Never assume cache coherency — always use DSB/DMB/ISB barriers after cache ops.

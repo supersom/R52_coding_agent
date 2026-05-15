@@ -21,6 +21,7 @@ from r52_types import CodeGenerationOutput
 from agent.prompts.system_r52 import SYSTEM_R52
 from backends.base import LLMBackend
 from context.repo_reader import read_repo_context, format_context_for_prompt
+from agent.nodes.scout import format_hardware_model
 
 
 GENERATOR_PROMPT = """
@@ -30,11 +31,17 @@ GENERATOR_PROMPT = """
 ## Implementation Plan
 {plan}
 
-## Target Simulator
-{simulator_note}
+## Hardware Model
+{hardware_map}
+
+## Trust note
+{trust_note}
 
 ## Current Repository
 {repo_context}
+
+## Review feedback (fix these specific issues before proceeding)
+{review_feedback}
 
 ## Previous Attempts (if any)
 {history}
@@ -49,23 +56,10 @@ Rules:
 - For each file, include its full path relative to the repo root.
 - If creating a new project, generate: startup.s, link.ld, main.c, Makefile.
 - Do NOT modify startup.s or link.ld unless the plan explicitly requires it.
-- Use the correct UART address and memory map for the Target Simulator above.
+- The hardware model above is your only source of truth for addresses, sizes,
+  and memory region boundaries. Do not substitute your own prior knowledge.
+- If review feedback is present above, address every listed issue explicitly.
 """
-
-_SIMULATOR_NOTES = {
-    "fvp": (
-        "FVP_BaseR_Cortex-R52 — true Cortex-R52 simulation.\n"
-        "UART: 0x1C090000 (PL011). RAM starts at 0x00000000. "
-        "Use semihosting (SVC #0x123456 / HLT 0xF000) for debug output."
-    ),
-    "qemu": (
-        "QEMU versatilepb (qemu-system-arm -M versatilepb -m 128M).\n"
-        "UART: 0x101F1000 — write bytes directly to this address for output. "
-        "RAM: 128MB at 0x00000000, load code at 0x10000. "
-        "No semihosting output — use UART writes only. "
-        "For program exit use semihosting SYS_EXIT: r0=0x18, r1=0, svc #0x123456."
-    ),
-}
 
 
 def run_generator(state: AgentState, backend: LLMBackend) -> AgentState:
@@ -81,12 +75,24 @@ def run_generator(state: AgentState, backend: LLMBackend) -> AgentState:
     else:
         repo_context_str = state.repo_context.get("formatted_context", "")
 
-    simulator_note = _SIMULATOR_NOTES.get(state.simulator.value, _SIMULATOR_NOTES["fvp"])
+    hw_model = state.repo_context.get("hardware_model", {})
+    if not hw_model or not hw_model.get("fields"):
+        raise RuntimeError(
+            "Hardware model is absent — SCOUT must run and produce a model "
+            "before code can be generated. Cannot proceed without verified hardware facts."
+        )
+
+    hw_map_str = format_hardware_model(hw_model)
+    trust_note = _trust_summary(hw_model)
+    review_feedback = _format_review_feedback(state.repo_context.get("review", {}))
+
     user_prompt = GENERATOR_PROMPT.format(
         task=state.task,
         plan=json.dumps(plan, indent=2),
-        simulator_note=simulator_note,
+        hardware_map=hw_map_str,
+        trust_note=trust_note,
         repo_context=repo_context_str,
+        review_feedback=review_feedback,
         history=history_summary,
     )
 
@@ -107,9 +113,12 @@ def run_generator(state: AgentState, backend: LLMBackend) -> AgentState:
         file_path.write_text(gf.content)
         generated[gf.path] = gf.content
 
+    # Only count iterations when coming from PATCH (state.history is non-empty).
+    # Review re-generation cycles don't consume retry budget.
+    new_iteration = state.iteration + 1 if state.history else state.iteration
     return state.model_copy(update={
         "generated_files": generated,
-        "iteration": state.iteration + 1,
+        "iteration": new_iteration,
     })
 
 
@@ -131,3 +140,30 @@ def _format_history(state: AgentState) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _format_review_feedback(review: dict) -> str:
+    if not review or review.get("approved", True):
+        return "None — proceeding with initial generation."
+    issues = review.get("issues", [])
+    if not issues:
+        return "Reviewer rejected but provided no specific issues."
+    lines = ["The previous generation was REJECTED. Fix ALL of these issues:"]
+    for i, issue in enumerate(issues, 1):
+        lines.append(f"  {i}. {issue}")
+    return "\n".join(lines)
+
+
+def _trust_summary(hw_model: dict) -> str:
+    fields = hw_model.get("fields", {})
+    if not fields:
+        return ""
+    prior = [k for k, v in fields.items() if v.get("trust") == "prior"]
+    verified = len(fields) - len(prior)
+    if not prior:
+        return f"All {verified} hardware fields are verified from live probes or source."
+    return (
+        f"{verified}/{len(fields)} fields verified from live probes or source. "
+        f"The following fields are UNVERIFIED (LLM prior — scrutinise carefully): "
+        f"{', '.join(prior)}"
+    )

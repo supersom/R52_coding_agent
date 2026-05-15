@@ -24,46 +24,62 @@ from pydantic import BaseModel
 
 from agent.state import AgentState
 from agent.prompts.system_r52 import SYSTEM_R52
+from agent.nodes.scout import format_hardware_model
 from backends.base import LLMBackend
 
 
 class ReviewResult(BaseModel):
     approved: bool
     issues: list[str]
-    corrected_files: dict[str, str] = {}   # path → corrected content (if approved=False and fixable inline)
-    severity: str = "none"                 # "none" | "warning" | "error"
+    corrected_files: dict[str, str] = {}
+    severity: str = "none"  # "none" | "warning" | "error"
 
 
 REVIEWER_PROMPT = """
 ## Task
 {task}
 
+## Verified Hardware Model
+{hardware_map}
+
 ## Generated Files
 {files}
 
-Review the generated ARM Cortex-R52 bare-metal code for:
+Reason about whether this implementation will actually work on this platform.
 
-1. **Correctness**: Does it implement what the task asks?
-2. **ARM R52 idioms**: Correct register access, memory barriers, AAPCS compliance?
-3. **Startup/linker compatibility**: Will it link correctly with existing startup.s / link.ld?
-4. **Build system**: Is the Makefile/CMakeLists.txt correct for arm-none-eabi-gcc?
-5. **Common bugs**: Uninitialized stack, missing .bss zeroing, non-volatile hardware pointers?
+Trace the execution from reset: what does the CPU do first, what state is it
+in at each step, and does it reach the intended behaviour? Think about what
+could prevent the task from being accomplished before the code even gets to
+the interesting part.
 
-If you find issues that you can fix inline, correct them and set approved=True with corrected_files.
-If the issues require re-generation, set approved=False and list the issues.
-If code looks good, set approved=True with empty issues list.
+Then consider the hardware model above as ground truth. Does the code make
+assumptions about the platform that conflict with it? An assumption doesn't
+have to be explicit — a hardcoded address, a size calculation, or an offset
+that silently disagrees with the model is just as dangerous.
+
+The goal is to catch anything that would cause a silent failure: a run that
+produces no output, wrong output, or a hang — where the mismatch isn't obvious
+from the code alone but becomes clear when you compare it against what the
+hardware actually looks like.
+
+If you find fixable issues, correct them inline and set approved=True with
+corrected_files. If re-generation is needed, set approved=False and explain
+what specifically would prevent the task from being accomplished.
 """
 
 
 def run_reviewer(state: AgentState, backend: LLMBackend) -> AgentState:
     """
-    Review generated files. If reviewer corrects them inline, apply those corrections.
+    Review generated files against the verified hardware model.
+    If reviewer corrects issues inline, apply those corrections.
     Returns state with possibly-corrected files and a review note in repo_context.
     """
     files_str = _format_files(state.generated_files)
+    hw_map = format_hardware_model(state.repo_context.get("hardware_model", {}))
 
     user_prompt = REVIEWER_PROMPT.format(
         task=state.task,
+        hardware_map=hw_map,
         files=files_str,
     )
 
@@ -74,7 +90,11 @@ def run_reviewer(state: AgentState, backend: LLMBackend) -> AgentState:
         temperature=0.0,
     )
 
-    state.repo_context["review"] = result.model_dump()
+    review_data = result.model_dump()
+    # Track consecutive rejections so the graph can break infinite review loops.
+    prev_rejections = state.repo_context.get("review", {}).get("rejection_count", 0)
+    review_data["rejection_count"] = 0 if result.approved else prev_rejections + 1
+    state.repo_context["review"] = review_data
 
     if result.corrected_files:
         # Apply inline corrections to disk and state

@@ -24,14 +24,18 @@ from r52_types import CodeGenerationOutput
 from r52_types import AgentStatus
 from agent.prompts.system_r52 import SYSTEM_R52
 from backends.base import LLMBackend
+from agent.nodes.scout import format_hardware_model
 
 
 PATCHER_PROMPT = """
 ## Original Task
 {task}
 
-## Target Simulator
-{simulator_note}
+## Hardware Model
+{hardware_map}
+
+## Trust note
+{trust_note}
 
 ## Current Code (files that exist on disk)
 {current_files}
@@ -39,34 +43,21 @@ PATCHER_PROMPT = """
 ## What Failed
 {failure_summary}
 
+## Diagnosis
+{diagnosis}
+
 ## All Previous Attempts
 {history}
 
 Fix the code to resolve the failure. Produce the complete corrected file set.
 
 Rules:
-- Only change what is needed to fix the error — do not rewrite unrelated logic.
-- If a build error mentions a specific line, fix that line.
-- If a run produced wrong output, trace back which function is responsible.
-- If the program timed out, check for infinite loops or missing SYS_EXIT semi-hosting call.
-- Use the correct UART address and memory map for the Target Simulator above.
+- Only change what is needed to fix the failure — do not rewrite unrelated logic.
+- The hardware model above is your only source of truth for addresses, sizes,
+  and memory region boundaries. Do not substitute your own prior knowledge.
+- If the diagnosis section above identifies a root cause, fix that specifically.
 - Output ALL files (not just the changed ones) so the repo is in a consistent state.
 """
-
-_SIMULATOR_NOTES = {
-    "fvp": (
-        "FVP_BaseR_Cortex-R52 — true Cortex-R52 simulation.\n"
-        "UART: 0x1C090000 (PL011). RAM starts at 0x00000000. "
-        "Use semihosting (SVC #0x123456 / HLT 0xF000) for debug output."
-    ),
-    "qemu": (
-        "QEMU versatilepb (qemu-system-arm -M versatilepb -m 128M).\n"
-        "UART: 0x101F1000 — write bytes directly to this address for output. "
-        "RAM: 128MB at 0x00000000, load code at 0x10000. "
-        "No semihosting output — use UART writes only. "
-        "For program exit use semihosting SYS_EXIT: r0=0x18, r1=0, svc #0x123456."
-    ),
-}
 
 
 def run_patcher(state: AgentState, backend: LLMBackend) -> AgentState:
@@ -91,12 +82,20 @@ def run_patcher(state: AgentState, backend: LLMBackend) -> AgentState:
     current_files = _format_files(state.generated_files)
     history_str = _format_history(new_history)
 
-    simulator_note = _SIMULATOR_NOTES.get(state.simulator.value, _SIMULATOR_NOTES["fvp"])
+    hw_model = state.repo_context.get("hardware_model", {})
+    if not hw_model or not hw_model.get("fields"):
+        raise RuntimeError(
+            "Hardware model is absent — cannot patch without verified hardware facts."
+        )
+
+    diagnosis = state.repo_context.get("diagnosis", "(no diagnosis available)")
     user_prompt = PATCHER_PROMPT.format(
         task=state.task,
-        simulator_note=simulator_note,
+        hardware_map=format_hardware_model(hw_model),
+        trust_note=_trust_summary(hw_model),
         current_files=current_files,
         failure_summary=failure_summary,
+        diagnosis=diagnosis,
         history=history_str,
     )
 
@@ -156,3 +155,18 @@ def _format_history(history: list) -> str:
     for a in history[-5:]:
         lines.append(f"Attempt {a.iteration}: {a.patch_reasoning[:300] or 'no notes'}")
     return "\n".join(lines)
+
+
+def _trust_summary(hw_model: dict) -> str:
+    fields = hw_model.get("fields", {})
+    if not fields:
+        return ""
+    prior = [k for k, v in fields.items() if v.get("trust") == "prior"]
+    verified = len(fields) - len(prior)
+    if not prior:
+        return f"All {verified} hardware fields are verified from live probes or source."
+    return (
+        f"{verified}/{len(fields)} fields verified. "
+        f"UNVERIFIED (LLM prior — suspect these if the bug relates to hardware values): "
+        f"{', '.join(prior)}"
+    )
